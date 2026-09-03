@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <meta name="theme-color" content="#041a2e" />
+  <meta http-equiv="Permissions-Policy" content="xr-spatial-tracking=(self), gyroscope=(self), accelerometer=(self)" />
+  <title>Underwater WebXR + Cardboard Demo</title>
+  <style>
+    :root{
+      --glass: rgba(4, 25, 46, .72);
+      --line: rgba(150, 225, 255, .25);
+      --text: #e9fbff;
+      --accent: #84ecff;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; background:#031725; font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans Thai",sans-serif; color:var(--text); }
+    canvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
+    #hud {
+      position:fixed; inset:0; z-index:5; pointer-events:none;
+      display:flex; flex-direction:column; justify-content:space-between;
+      padding:max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+    }
+    #topbar { display:flex; gap:8px; align-items:flex-start; justify-content:space-between; }
+    .pill {
+      background:var(--glass); border:1px solid var(--line); border-radius:999px;
+      padding:8px 12px; backdrop-filter:blur(10px); font-size:12px; line-height:1.2;
+      box-shadow:0 8px 30px rgba(0,0,0,.18);
+    }
+    #status { max-width:min(76vw,560px); }
+    #recenter { pointer-events:auto; cursor:pointer; user-select:none; display:none; }
+    #centerReticle {
+      position:absolute; left:50%; top:50%; width:18px; height:18px; transform:translate(-50%,-50%);
+      border:1px solid rgba(255,255,255,.55); border-radius:50%; opacity:.45;
+    }
+    #centerReticle::before, #centerReticle::after {
+      content:""; position:absolute; background:rgba(255,255,255,.55);
+    }
+    #centerReticle::before { width:6px; height:1px; left:5px; top:8px; }
+    #centerReticle::after { width:1px; height:6px; left:8px; top:5px; }
+
+    #menu {
+      position:fixed; inset:0; z-index:10; display:grid; place-items:center;
+      padding:18px; background:linear-gradient(180deg,rgba(0,9,19,.14),rgba(0,10,20,.62));
+    }
+    .panel {
+      width:min(520px,100%); padding:22px; border-radius:24px;
+      background:rgba(2,23,41,.79); border:1px solid rgba(171,235,255,.22);
+      box-shadow:0 24px 80px rgba(0,0,0,.42); backdrop-filter:blur(16px);
+    }
+    h1 { font-size:clamp(24px,7vw,40px); margin:0 0 7px; letter-spacing:-.02em; }
+    .sub { opacity:.78; font-size:14px; line-height:1.55; margin:0 0 18px; }
+    .buttons { display:grid; gap:10px; }
+    button {
+      width:100%; border:0; border-radius:16px; padding:14px 16px;
+      font-size:15px; font-weight:700; cursor:pointer;
+      background:linear-gradient(135deg,#9af2ff,#79c9ff); color:#052238;
+      box-shadow:0 9px 28px rgba(70,196,255,.2);
+    }
+    button.secondary { background:rgba(255,255,255,.08); color:var(--text); border:1px solid rgba(255,255,255,.13); box-shadow:none; }
+    button:disabled { opacity:.38; cursor:not-allowed; }
+    #compat { margin-top:14px; padding:12px; border-radius:14px; background:rgba(0,0,0,.16); font-size:12px; line-height:1.55; opacity:.9; }
+    .ok { color:#bfffc7; } .warn { color:#ffe5a4; }
+    #hint { margin-top:10px; font-size:11px; opacity:.62; line-height:1.45; }
+    #exitCardboard {
+      position:fixed; z-index:12; right:12px; bottom:max(12px,env(safe-area-inset-bottom));
+      display:none; width:auto; pointer-events:auto; padding:10px 14px; border-radius:999px;
+      background:rgba(0,0,0,.52); color:white; border:1px solid rgba(255,255,255,.18);
+    }
+    #divider { position:fixed; z-index:4; top:0; bottom:0; left:50%; width:1px; background:rgba(255,255,255,.12); display:none; pointer-events:none; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="menu">
+    <div class="panel">
+      <h1>🌊 Underwater XR</h1>
+      <p class="sub">
+        เดโมโลกใต้ทะเลสำหรับ Android: ใช้ WebXR เมื่ออุปกรณ์รองรับ และมีโหมด Cardboard
+        แบบจอคู่ที่ควบคุมมุมมองด้วย Gyroscope/Device Orientation
+      </p>
+      <div class="buttons">
+        <button id="btnXR">🥽 เข้า WebXR VR</button>
+        <button id="btnCardboard">📱 เข้า Google Cardboard (Gyroscope)</button>
+        <button id="btnGyro" class="secondary">🧭 ดูแบบเต็มจอด้วย Gyroscope</button>
+        <button id="btnDesktop" class="secondary">🖱️ ดูแบบปกติ / ลากเมาส์</button>
+      </div>
+      <div id="compat">กำลังตรวจสอบความสามารถของอุปกรณ์…</div>
+      <div id="hint">
+        แนะนำ: เปิดผ่าน HTTPS บน Chrome Android • หมุนโทรศัพท์เป็นแนวนอนก่อนใส่ Cardboard •
+        หาก WebXR ใช้ไม่ได้ ให้เลือก “Google Cardboard (Gyroscope)”
+      </div>
+    </div>
+  </div>
+
+  <div id="hud">
+    <div id="topbar">
+      <div id="status" class="pill">กำลังโหลดโลกใต้ทะเล…</div>
+      <div id="recenter" class="pill">◎ ปรับศูนย์</div>
+    </div>
+    <div id="centerReticle"></div>
+  </div>
+  <div id="divider"></div>
+  <button id="exitCardboard">ออกจาก Cardboard</button>
+
+<script type="module">
+import * as THREE from 'three';
+
+const menu = document.getElementById('menu');
+const compat = document.getElementById('compat');
+const statusEl = document.getElementById('status');
+const btnXR = document.getElementById('btnXR');
+const btnCardboard = document.getElementById('btnCardboard');
+const btnGyro = document.getElementById('btnGyro');
+const btnDesktop = document.getElementById('btnDesktop');
+const recenterBtn = document.getElementById('recenter');
+const exitCardboard = document.getElementById('exitCardboard');
+const divider = document.getElementById('divider');
+const reticle = document.getElementById('centerReticle');
+
+let mode = 'desktop'; // desktop | gyro | cardboard | webxr
+let xrSession = null;
+let hasOrientation = false;
+let initialAlphaOffset = null;
+let lastOrientationEvent = null;
+let pointerDown = false;
+let pointerX = 0, pointerY = 0;
+let manualYaw = 0, manualPitch = 0;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x06324a);
+scene.fog = new THREE.FogExp2(0x06324a, 0.035);
+
+const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.05, 120);
+camera.position.set(0, 1.7, 7);
+
+const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.8));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = false;
+document.body.prepend(renderer.domElement);
+
+// Cardboard stereo cameras.
+const cardboardCameraL = new THREE.PerspectiveCamera(72, 1, 0.05, 120);
+const cardboardCameraR = new THREE.PerspectiveCamera(72, 1, 0.05, 120);
+const cardboardEyeSeparation = 0.064; // ~64 mm IPD
+const renderSize = new THREE.Vector2();
+const eyeOffset = new THREE.Vector3();
+
+// Lighting
+scene.add(new THREE.HemisphereLight(0x8bdcff, 0x041724, 1.9));
+const sun = new THREE.DirectionalLight(0xc2f5ff, 2.0);
+sun.position.set(-3, 10, 5);
+scene.add(sun);
+
+// Seafloor
+const floorGeo = new THREE.PlaneGeometry(140, 140, 80, 80);
+const pos = floorGeo.attributes.position;
+for(let i=0;i<pos.count;i++){
+  const x = pos.getX(i), y = pos.getY(i);
+  const z = Math.sin(x*.22)*.18 + Math.cos(y*.19)*.14 + Math.sin((x+y)*.08)*.1;
+  pos.setZ(i,z);
+}
+floorGeo.computeVertexNormals();
+const floorMat = new THREE.MeshStandardMaterial({color:0x91795c, roughness:1, metalness:0});
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI/2;
+floor.position.y = -2.3;
+scene.add(floor);
+
+// Water light shafts
+for(let i=0;i<10;i++){
+  const geo = new THREE.ConeGeometry(1.0+Math.random()*1.6, 18+Math.random()*9, 24, 1, true);
+  const mat = new THREE.MeshBasicMaterial({
+    color:0x91eaff, transparent:true, opacity:0.025+Math.random()*0.035,
+    depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending
+  });
+  const beam = new THREE.Mesh(geo,mat);
+  beam.position.set((Math.random()-.5)*30, 7+(Math.random()*4), (Math.random()-.5)*30);
+  beam.rotation.z = (Math.random()-.5)*0.18;
+  scene.add(beam);
+}
+
+// Rocks
+const rockMat = new THREE.MeshStandardMaterial({color:0x30434a, roughness:.95});
+for(let i=0;i<30;i++){
+  const geo = new THREE.DodecahedronGeometry(.35+Math.random()*1.0, 0);
+  const rock = new THREE.Mesh(geo, rockMat);
+  rock.scale.set(1+Math.random()*1.8, .5+Math.random()*.8, 1+Math.random()*1.4);
+  rock.position.set((Math.random()-.5)*45,-2.05,(Math.random()-.5)*45);
+  rock.rotation.set(Math.random(),Math.random(),Math.random());
+  scene.add(rock);
+}
+
+// Seaweed
+const seaweed = [];
+for(let i=0;i<70;i++){
+  const h=.7+Math.random()*2.4;
+  const geo=new THREE.CylinderGeometry(.025,.08,h,5);
+  const mat=new THREE.MeshStandardMaterial({color:Math.random()>.5?0x1c796f:0x2b8d62, roughness:.8});
+  const s=new THREE.Mesh(geo,mat);
+  s.position.set((Math.random()-.5)*44,-2.15+h/2,(Math.random()-.5)*44);
+  s.userData.phase=Math.random()*Math.PI*2;
+  s.userData.speed=.5+Math.random()*.8;
+  scene.add(s); seaweed.push(s);
+}
+
+// Fish geometry maker
+function createFish(color=0xffb044, scale=1){
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(
+    new THREE.SphereGeometry(.42*scale,.75?20:16,12),
+    new THREE.MeshStandardMaterial({color,roughness:.55,metalness:.04})
+  );
+  body.scale.set(1.55,.72,.62);
+  g.add(body);
+
+  const tailGeo=new THREE.BufferGeometry();
+  tailGeo.setAttribute('position', new THREE.Float32BufferAttribute([
+    -.55*scale,0,0,
+    -1.0*scale,.45*scale,0,
+    -1.0*scale,-.45*scale,0
+  ],3));
+  tailGeo.computeVertexNormals();
+  const tail=new THREE.Mesh(tailGeo,new THREE.MeshStandardMaterial({color,side:THREE.DoubleSide}));
+  tail.position.x=-.25*scale;
+  g.add(tail);
+
+  const eyeMat=new THREE.MeshBasicMaterial({color:0xffffff});
+  const pupilMat=new THREE.MeshBasicMaterial({color:0x061018});
+  for(const z of [-1,1]){
+    const e=new THREE.Mesh(new THREE.SphereGeometry(.055*scale,10,8),eyeMat);
+    e.position.set(.46*scale,.10*scale,z*.20*scale);
+    const p=new THREE.Mesh(new THREE.SphereGeometry(.027*scale,8,6),pupilMat);
+    p.position.set(.025*scale,0,z*.04*scale);
+    e.add(p); g.add(e);
+  }
+  return g;
+}
+
+const fish = [];
+const fishColors=[0xffb13b,0x52d7ff,0xff6d80,0x7ef18b,0xb590ff,0xffdd64];
+for(let i=0;i<34;i++){
+  const f=createFish(fishColors[i%fishColors.length], .38+Math.random()*.7);
+  f.position.set((Math.random()-.5)*36,-.7+Math.random()*7,-8-Math.random()*32);
+  f.userData.speed=.35+Math.random()*.75;
+  f.userData.phase=Math.random()*Math.PI*2;
+  f.userData.radius=4+Math.random()*18;
+  f.userData.centerZ=-7-Math.random()*26;
+  f.userData.centerX=(Math.random()-.5)*14;
+  scene.add(f); fish.push(f);
+}
+
+// A larger manta-like creature
+const manta = new THREE.Group();
+const mantaBody = new THREE.Mesh(
+  new THREE.SphereGeometry(1.3,24,16),
+  new THREE.MeshStandardMaterial({color:0x395f73,roughness:.7})
+);
+mantaBody.scale.set(1.6,.18,1.15);
+manta.add(mantaBody);
+for(const side of [-1,1]){
+  const wingGeo=new THREE.BufferGeometry();
+  wingGeo.setAttribute('position',new THREE.Float32BufferAttribute([
+    0,0,0, side*3.0,0,-.6, side*2.1,0,1.0
+  ],3));
+  wingGeo.computeVertexNormals();
+  manta.add(new THREE.Mesh(wingGeo,new THREE.MeshStandardMaterial({color:0x416e82,side:THREE.DoubleSide})));
+}
+manta.position.set(-3,2,-18);
+scene.add(manta);
+
+// Bubbles
+const bubbleGeo=new THREE.SphereGeometry(.055,8,6);
+const bubbleMat=new THREE.MeshBasicMaterial({color:0xd7f8ff,transparent:true,opacity:.35,depthWrite:false});
+const bubbles=[];
+for(let i=0;i<110;i++){
+  const b=new THREE.Mesh(bubbleGeo,bubbleMat);
+  const s=.45+Math.random()*1.9; b.scale.setScalar(s);
+  b.position.set((Math.random()-.5)*34,-2+Math.random()*12,(Math.random()-.5)*38);
+  b.userData.speed=.35+Math.random()*1.1;
+  b.userData.wobble=Math.random()*6.28;
+  scene.add(b); bubbles.push(b);
+}
+
+// Floating dust particles
+const dustCount=1100;
+const dustPositions=new Float32Array(dustCount*3);
+for(let i=0;i<dustCount;i++){
+  dustPositions[i*3]=(Math.random()-.5)*55;
+  dustPositions[i*3+1]=-2+Math.random()*18;
+  dustPositions[i*3+2]=(Math.random()-.5)*55;
+}
+const dustGeo=new THREE.BufferGeometry();
+dustGeo.setAttribute('position',new THREE.BufferAttribute(dustPositions,3));
+const dust=new THREE.Points(dustGeo,new THREE.PointsMaterial({color:0xb7edf0,size:.025,transparent:true,opacity:.45,depthWrite:false}));
+scene.add(dust);
+
+// Subtle caustic rings on seafloor
+for(let i=0;i<22;i++){
+  const ring=new THREE.Mesh(
+    new THREE.RingGeometry(.8+Math.random()*1.2,1.0+Math.random()*1.3,28),
+    new THREE.MeshBasicMaterial({color:0x9fefff,transparent:true,opacity:.035,side:THREE.DoubleSide,depthWrite:false})
+  );
+  ring.rotation.x=-Math.PI/2;
+  ring.position.set((Math.random()-.5)*30,-2.24,(Math.random()-.5)*30);
+  ring.scale.y=.45;
+  scene.add(ring);
+}
+
+// Gyroscope orientation conversion
+const zee = new THREE.Vector3(0,0,1);
+const euler = new THREE.Euler();
+const q0 = new THREE.Quaternion();
+const q1 = new THREE.Quaternion(-Math.sqrt(.5),0,0,Math.sqrt(.5));
+
+function screenOrientationRad(){
+  if(screen.orientation && typeof screen.orientation.angle === 'number') return THREE.MathUtils.degToRad(screen.orientation.angle);
+  return THREE.MathUtils.degToRad(window.orientation || 0);
+}
+
+function applyDeviceOrientation(){
+  if(!lastOrientationEvent) return;
+  let alpha = THREE.MathUtils.degToRad(lastOrientationEvent.alpha || 0);
+  const beta = THREE.MathUtils.degToRad(lastOrientationEvent.beta || 0);
+  const gamma = THREE.MathUtils.degToRad(lastOrientationEvent.gamma || 0);
+  const orient = screenOrientationRad();
+
+  if(initialAlphaOffset === null) initialAlphaOffset = alpha;
+  alpha -= initialAlphaOffset;
+
+  euler.set(beta, alpha, -gamma, 'YXZ');
+  camera.quaternion.setFromEuler(euler);
+  camera.quaternion.multiply(q1);
+  camera.quaternion.multiply(q0.setFromAxisAngle(zee, -orient));
+}
+
+function onDeviceOrientation(e){
+  lastOrientationEvent=e;
+  hasOrientation = e.alpha !== null || e.beta !== null || e.gamma !== null;
+}
+
+async function enableGyro(){
+  try{
+    if(typeof DeviceOrientationEvent !== 'undefined' &&
+       typeof DeviceOrientationEvent.requestPermission === 'function'){
+      const result=await DeviceOrientationEvent.requestPermission();
+      if(result!=='granted') throw new Error('ไม่ได้รับอนุญาตให้ใช้เซนเซอร์');
+    }
+    window.removeEventListener('deviceorientation',onDeviceOrientation);
+    window.addEventListener('deviceorientation',onDeviceOrientation,true);
+    recenterBtn.style.display='block';
+    return true;
+  }catch(err){
+    statusEl.textContent='Gyroscope: '+err.message;
+    return false;
+  }
+}
+
+function recenter(){
+  if(lastOrientationEvent && lastOrientationEvent.alpha !== null){
+    initialAlphaOffset=THREE.MathUtils.degToRad(lastOrientationEvent.alpha);
+  }else{
+    initialAlphaOffset=null;
+  }
+}
+recenterBtn.addEventListener('click',recenter);
+
+async function requestLandscapeFullscreen(){
+  try{ if(document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen(); }catch{}
+  try{ if(screen.orientation?.lock) await screen.orientation.lock('landscape'); }catch{}
+}
+
+async function startCardboard(){
+  const ok=await enableGyro();
+  mode='cardboard';
+  menu.style.display='none';
+  divider.style.display='block';
+  exitCardboard.style.display='block';
+  reticle.style.display='none';
+  await requestLandscapeFullscreen();
+  // Some Android browsers dispatch fullscreen/orientation resize a frame later.
+  requestAnimationFrame(()=>resize());
+  setTimeout(()=>resize(), 120);
+  statusEl.textContent=ok ? 'Cardboard • Stereo ซ้าย/ขวา + Gyroscope พร้อมใช้งาน' : 'Cardboard • Stereo ซ้าย/ขวาเปิดแล้ว แต่ไม่พบ Gyroscope';
+}
+
+async function startGyro(){
+  const ok=await enableGyro();
+  mode='gyro';
+  menu.style.display='none';
+  divider.style.display='none';
+  exitCardboard.style.display='block';
+  reticle.style.display='block';
+  await requestLandscapeFullscreen();
+  statusEl.textContent=ok ? 'Gyroscope mode • หมุนโทรศัพท์เพื่อมองรอบตัว' : 'ไม่สามารถเปิด Gyroscope ได้';
+}
+
+function startDesktop(){
+  mode='desktop';
+  menu.style.display='none';
+  divider.style.display='none';
+  exitCardboard.style.display='block';
+  reticle.style.display='block';
+  statusEl.textContent='Desktop mode • ลากเมาส์/นิ้วเพื่อมองรอบตัว';
+}
+
+async function startWebXR(){
+  try{
+    if(!navigator.xr) throw new Error('เบราว์เซอร์นี้ไม่มี WebXR');
+    const supported=await navigator.xr.isSessionSupported('immersive-vr');
+    if(!supported) throw new Error('อุปกรณ์นี้ไม่เปิด immersive-vr — ใช้ Cardboard Gyroscope แทน');
+    xrSession=await navigator.xr.requestSession('immersive-vr',{
+      optionalFeatures:['local-floor','bounded-floor']
+    });
+    mode='webxr';
+    menu.style.display='none';
+    divider.style.display='none';
+    exitCardboard.style.display='none';
+    recenterBtn.style.display='none';
+    reticle.style.display='none';
+    await renderer.xr.setSession(xrSession);
+    statusEl.textContent='WebXR immersive-vr';
+    xrSession.addEventListener('end',()=>{
+      xrSession=null; mode='desktop'; menu.style.display='grid'; reticle.style.display='block';
+      statusEl.textContent='ออกจาก WebXR แล้ว';
+    });
+  }catch(err){
+    statusEl.textContent='WebXR: '+err.message;
+    compat.innerHTML += `<br><span class="warn">WebXR เปิดไม่ได้: ${err.message}</span>`;
+  }
+}
+
+btnXR.addEventListener('click',startWebXR);
+btnCardboard.addEventListener('click',startCardboard);
+btnGyro.addEventListener('click',startGyro);
+btnDesktop.addEventListener('click',startDesktop);
+
+exitCardboard.addEventListener('click',async()=>{
+  mode='desktop';
+  divider.style.display='none';
+  exitCardboard.style.display='none';
+  recenterBtn.style.display='none';
+  reticle.style.display='block';
+  try{ if(document.fullscreenElement) await document.exitFullscreen(); }catch{}
+  menu.style.display='grid';
+});
+
+// Mouse/touch fallback
+renderer.domElement.addEventListener('pointerdown',e=>{
+  if(mode!=='desktop') return;
+  pointerDown=true; pointerX=e.clientX; pointerY=e.clientY;
+});
+addEventListener('pointerup',()=>pointerDown=false);
+addEventListener('pointermove',e=>{
+  if(!pointerDown || mode!=='desktop') return;
+  const dx=e.clientX-pointerX, dy=e.clientY-pointerY;
+  pointerX=e.clientX; pointerY=e.clientY;
+  manualYaw-=dx*.004;
+  manualPitch-=dy*.004;
+  manualPitch=Math.max(-1.25,Math.min(1.25,manualPitch));
+});
+renderer.domElement.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+
+function updateCamera(){
+  if((mode==='gyro'||mode==='cardboard') && lastOrientationEvent) applyDeviceOrientation();
+  else if(mode==='desktop') camera.rotation.set(manualPitch,manualYaw,0,'YXZ');
+}
+
+const clock=new THREE.Clock();
+
+function animateScene(t){
+  const time=t*.001;
+  for(let i=0;i<fish.length;i++){
+    const f=fish[i], u=f.userData;
+    const a=time*u.speed+u.phase;
+    f.position.x=u.centerX+Math.cos(a)*u.radius;
+    f.position.z=u.centerZ+Math.sin(a)*u.radius*.6;
+    f.position.y=-.5+Math.sin(a*1.8+i)*1.3+(i%5)*.55;
+    const tangent=a+.03;
+    const nx=u.centerX+Math.cos(tangent)*u.radius;
+    const nz=u.centerZ+Math.sin(tangent)*u.radius*.6;
+    f.lookAt(nx,f.position.y,nz);
+  }
+  manta.position.x=Math.sin(time*.13)*8;
+  manta.position.z=-18+Math.cos(time*.13)*5;
+  manta.position.y=1.3+Math.sin(time*.4)*.8;
+  manta.rotation.y=-time*.13;
+  manta.rotation.z=Math.sin(time*.8)*.05;
+
+  for(const b of bubbles){
+    b.position.y+=b.userData.speed*.012;
+    b.position.x+=Math.sin(time*1.2+b.userData.wobble)*.0018;
+    if(b.position.y>10){ b.position.y=-2.1; b.position.x=(Math.random()-.5)*34; b.position.z=(Math.random()-.5)*38; }
+  }
+  for(const s of seaweed){
+    s.rotation.z=Math.sin(time*s.userData.speed+s.userData.phase)*.06;
+  }
+  dust.rotation.y=time*.004;
+}
+
+function renderCardboard(){
+  // IMPORTANT:
+  // renderer.setViewport()/setScissor() expect logical (CSS) pixels.
+  // Using canvas.width here would apply devicePixelRatio twice on Android
+  // and can make the left eye fill the screen while the right eye renders off-screen.
+  renderer.getSize(renderSize);
+  const w = Math.max(2, Math.floor(renderSize.x));
+  const h = Math.max(1, Math.floor(renderSize.y));
+  const halfW = Math.floor(w / 2);
+  const rightW = w - halfW;
+  const eyeAspectL = halfW / h;
+  const eyeAspectR = rightW / h;
+
+  // Match the main camera pose, then shift each eye along the camera's local X axis.
+  cardboardCameraL.fov = camera.fov;
+  cardboardCameraL.near = camera.near;
+  cardboardCameraL.far = camera.far;
+  cardboardCameraL.aspect = eyeAspectL;
+  cardboardCameraL.position.copy(camera.position);
+  cardboardCameraL.quaternion.copy(camera.quaternion);
+  cardboardCameraL.updateProjectionMatrix();
+
+  cardboardCameraR.fov = camera.fov;
+  cardboardCameraR.near = camera.near;
+  cardboardCameraR.far = camera.far;
+  cardboardCameraR.aspect = eyeAspectR;
+  cardboardCameraR.position.copy(camera.position);
+  cardboardCameraR.quaternion.copy(camera.quaternion);
+  cardboardCameraR.updateProjectionMatrix();
+
+  eyeOffset.set(-cardboardEyeSeparation / 2, 0, 0).applyQuaternion(camera.quaternion);
+  cardboardCameraL.position.add(eyeOffset);
+
+  eyeOffset.set(cardboardEyeSeparation / 2, 0, 0).applyQuaternion(camera.quaternion);
+  cardboardCameraR.position.add(eyeOffset);
+
+  const previousAutoClear = renderer.autoClear;
+  renderer.autoClear = false;
+  renderer.setScissorTest(true);
+
+  // Left eye.
+  renderer.setViewport(0, 0, halfW, h);
+  renderer.setScissor(0, 0, halfW, h);
+  renderer.clear(true, true, true);
+  renderer.render(scene, cardboardCameraL);
+
+  // Right eye.
+  renderer.setViewport(halfW, 0, rightW, h);
+  renderer.setScissor(halfW, 0, rightW, h);
+  renderer.clear(true, true, true);
+  renderer.render(scene, cardboardCameraR);
+
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, w, h);
+  renderer.autoClear = previousAutoClear;
+}
+
+renderer.setAnimationLoop((t)=>{
+  animateScene(t);
+  if(mode!=='webxr') updateCamera();
+  if(mode==='cardboard' && !renderer.xr.isPresenting) renderCardboard();
+  else renderer.render(scene,camera);
+});
+
+function resize(){
+  const w=innerWidth,h=innerHeight;
+  camera.aspect=w/h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w,h);
+  renderer.setPixelRatio(Math.min(devicePixelRatio,1.8));
+}
+addEventListener('resize',resize);
+
+// Capability check
+(async()=>{
+  const secure = window.isSecureContext;
+  const gyroAPI = 'DeviceOrientationEvent' in window;
+  let xrAPI = !!navigator.xr;
+  let immersive = false;
+  if(xrAPI){
+    try{ immersive=await navigator.xr.isSessionSupported('immersive-vr'); }catch{}
+  }
+
+  btnXR.disabled = !immersive;
+  btnCardboard.disabled = !gyroAPI;
+  btnGyro.disabled = !gyroAPI;
+
+  compat.innerHTML =
+    `${secure?'<span class="ok">✓ Secure context</span>':'<span class="warn">⚠ ไม่ใช่ HTTPS/localhost</span>'}<br>`+
+    `${xrAPI?'<span class="ok">✓ พบ WebXR API</span>':'<span class="warn">⚠ ไม่พบ WebXR API</span>'}<br>`+
+    `${immersive?'<span class="ok">✓ immersive-vr พร้อมใช้งาน</span>':'<span class="warn">• immersive-vr ไม่พร้อม — ใช้ Cardboard fallback ได้</span>'}<br>`+
+    `${gyroAPI?'<span class="ok">✓ พบ Device Orientation API</span>':'<span class="warn">⚠ ไม่พบ Gyroscope/Device Orientation API</span>'}`;
+
+  statusEl.textContent='โลกใต้ทะเลพร้อมแล้ว';
+})();
+</script>
+</body>
+</html>
